@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "easy-rag"
+version = "0.1.0"
+description = "Build a retrieval-augmented-generation pipeline from a folder of documents in a few lines of code."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Anurag Mallick" }]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+pdf = ["pypdf>=4.0"]
+local = ["sentence-transformers>=2.2", "faiss-cpu>=1.7"]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.30"]
+all = ["pypdf>=4.0", "sentence-transformers>=2.2", "faiss-cpu>=1.7", "openai>=1.0", "anthropic>=0.30"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+easyrag = "easy_rag.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["easy_rag*"]
