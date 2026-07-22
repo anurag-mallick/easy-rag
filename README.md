@@ -138,12 +138,67 @@ Here is the whole process, end to end:
    easyrag query "your question here" --index .easyrag/index
    ```
 4. **Adding more documents later?** Ingest the new folder into the same
-   `--index` path; new chunks are appended to the existing index, so you
-   never have to reprocess documents you already ingested.
+   `--index` path. Ingestion is *incremental*: it fingerprints every file by
+   modification time and size, so a second `ingest` run only processes files
+   that are new or changed — everything else is skipped, and a changed file's
+   old chunks are automatically replaced rather than left behind as stale
+   duplicates.
 
 That's the entire loop. There is no separate training run, no GPU required
 for the default setup, and no waiting — the example in this repo indexes and
 becomes queryable in well under a second.
+
+## Registering source folders, and auto-ingesting dropped files
+
+Typing out a folder path every time gets old, and sometimes you just want new
+files to show up in the index automatically. Both are built in.
+
+### Pick which folders the index should ingest
+
+```bash
+easyrag sources add ./my_documents --index .easyrag/index
+easyrag sources add ./another_folder --index .easyrag/index
+easyrag sources list --index .easyrag/index
+```
+
+Once registered, `easyrag ingest` with no path ingests every registered
+folder:
+
+```bash
+easyrag ingest --index .easyrag/index
+```
+
+Remove a folder from the list with `easyrag sources remove <folder> --index
+.easyrag/index`. This only stops future ingestion from that folder — it
+doesn't delete chunks already ingested from it.
+
+### Auto-ingest files as they're dropped in
+
+```bash
+easyrag watch --index .easyrag/index --interval 5
+```
+
+This checks every registered source folder every 5 seconds (configurable)
+and ingests anything new or changed — so dropping a file into a watched
+folder gets it added to the index within one interval, with no command to
+re-run. Stop it with Ctrl+C. The same incremental fingerprinting from
+`ingest` applies, so already-processed files are never reprocessed.
+
+The same is available as a library, if you want to drive the watch loop
+yourself (e.g. from inside another application):
+
+```python
+import os
+
+from easy_rag import Pipeline
+from easy_rag.sources import add_source, load_sources
+from easy_rag.watcher import watch
+
+index_path = ".easyrag/index"
+add_source(index_path, "./my_documents")
+pipeline = Pipeline.load(index_path) if os.path.exists(index_path + ".config.json") else Pipeline()
+watch(pipeline, load_sources(index_path), index_path, interval=5)
+```
 
 ### Upgrading to real embeddings and Claude
 
@@ -168,8 +223,10 @@ easy_rag/
   embeddings.py      Embedder implementations: hashing (default), local, openai
   vectorstore.py      VectorStore implementations: numpy (default), faiss
   llm.py                Generator implementations: none (default), anthropic, openai
-  pipeline.py            Pipeline: wires the above together, plus save()/load()
-  cli.py                  `easyrag ingest` / `easyrag query`
+  pipeline.py            Pipeline: wires the above together, incremental ingest, save()/load()
+  sources.py               the list of folders an index ingests from
+  watcher.py                 polling loop that auto-ingests new/changed files
+  cli.py                       `easyrag ingest / query / sources / watch`
 ```
 
 Every provider (embedder, vector store, generator) implements a small,

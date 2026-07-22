@@ -1,6 +1,7 @@
 import numpy as np
+import pytest
 
-from easy_rag.vectorstore import NumpyVectorStore
+from easy_rag.vectorstore import FaissVectorStore, NumpyVectorStore
 
 
 def test_search_returns_most_similar_first():
@@ -41,3 +42,55 @@ def test_save_and_load_roundtrip(tmp_path):
 
     assert len(reloaded) == 2
     assert results[0][1] == "chunk_b"
+
+
+def test_remove_source_drops_only_matching_chunks():
+    store = NumpyVectorStore()
+    vectors = np.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]], dtype=np.float32)
+    store.add(vectors, ["chunk_a", "chunk_b", "chunk_c"], ["a.txt", "b.txt", "a.txt"])
+
+    store.remove_source("a.txt")
+
+    assert len(store) == 1
+    assert store._chunks == ["chunk_b"]
+    assert store._sources == ["b.txt"]
+
+
+def test_remove_source_with_no_match_is_a_no_op():
+    store = NumpyVectorStore()
+    vectors = np.array([[1.0, 0.0]], dtype=np.float32)
+    store.add(vectors, ["chunk_a"], ["a.txt"])
+
+    store.remove_source("does_not_exist.txt")
+
+    assert len(store) == 1
+
+
+def test_remove_all_chunks_leaves_store_searchable_and_empty():
+    store = NumpyVectorStore()
+    store.add(np.array([[1.0, 0.0]], dtype=np.float32), ["chunk_a"], ["a.txt"])
+
+    store.remove_source("a.txt")
+
+    assert len(store) == 0
+    assert store.search(np.array([1.0, 0.0], dtype=np.float32), top_k=1) == []
+
+
+faiss = pytest.importorskip("faiss", reason="faiss-cpu not installed")
+
+
+def test_faiss_remove_source_and_reload_roundtrip(tmp_path):
+    store = FaissVectorStore(dim=2)
+    vectors = np.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]], dtype=np.float32)
+    store.add(vectors, ["chunk_a", "chunk_b", "chunk_c"], ["a.txt", "b.txt", "a.txt"])
+
+    store.remove_source("a.txt")
+    assert len(store) == 1
+    assert store._chunks == ["chunk_b"]
+
+    prefix = str(tmp_path / "index")
+    store.save(prefix)
+    reloaded = FaissVectorStore(dim=2).load(prefix)
+    reloaded.remove_source("b.txt")
+
+    assert len(reloaded) == 0

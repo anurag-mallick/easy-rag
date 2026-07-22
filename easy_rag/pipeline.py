@@ -42,16 +42,37 @@ class Pipeline:
         )
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self._manifest = {}  # absolute source path -> [mtime, size] at last ingest
 
-    def ingest(self, path):
+    def ingest(self, path, force=False):
         """Load, chunk, embed, and index every supported file under `path`.
-        Returns the number of chunks added."""
+
+        Files already ingested (same path, mtime, and size as last time) are
+        skipped, so calling ingest() repeatedly on the same folder -- e.g.
+        from a folder watcher -- only processes files that are new or have
+        changed. A changed file has its old chunks removed first, so it
+        doesn't leave stale duplicates behind. Pass force=True to re-ingest
+        everything regardless of the manifest.
+
+        Returns the number of chunks added.
+        """
         documents = load_documents(path)
         all_chunks, all_sources = [], []
         for doc in documents:
+            # Always key by the absolute path, so the same file ingested via
+            # a relative path one time and an absolute path another still
+            # dedups/replaces correctly instead of being treated as new.
+            abs_source = os.path.abspath(doc.source)
+            stat = os.stat(doc.source)
+            fingerprint = [stat.st_mtime, stat.st_size]
+            if not force and self._manifest.get(abs_source) == fingerprint:
+                continue
+            if abs_source in self._manifest:
+                self.vectorstore.remove_source(abs_source)
             for chunk in split_text(doc.text, self.chunk_size, self.chunk_overlap):
                 all_chunks.append(chunk)
-                all_sources.append(doc.source)
+                all_sources.append(abs_source)
+            self._manifest[abs_source] = fingerprint
         if not all_chunks:
             return 0
         vectors = self.embedder.embed(all_chunks)
@@ -82,6 +103,8 @@ class Pipeline:
         }
         with open(path + ".config.json", "w", encoding="utf-8") as f:
             json.dump(config, f)
+        with open(path + ".manifest.json", "w", encoding="utf-8") as f:
+            json.dump(self._manifest, f)
         self.vectorstore.save(path)
 
     @classmethod
@@ -101,4 +124,8 @@ class Pipeline:
             llm_kwargs=llm_kwargs,
         )
         pipeline.vectorstore.load(path)
+        manifest_path = path + ".manifest.json"
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                pipeline._manifest = json.load(f)
         return pipeline
