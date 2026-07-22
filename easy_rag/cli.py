@@ -1,6 +1,7 @@
 """Command-line interface: `easyrag ingest` and `easyrag query`."""
 
 import argparse
+import os
 import sys
 
 from .pipeline import Pipeline
@@ -11,15 +12,21 @@ def _add_common_args(parser):
 
 
 def cmd_ingest(args):
-    pipeline = Pipeline(
-        embedder=args.embedder,
-        vectorstore=args.vectorstore,
-        chunk_size=args.chunk_size,
-        chunk_overlap=args.chunk_overlap,
-    )
+    existing = os.path.exists(args.index + ".config.json")
+    if existing:
+        pipeline = Pipeline.load(args.index)
+        print(f"Index {args.index!r} already exists -- appending to it (using its original embedder/vectorstore config).")
+    else:
+        pipeline = Pipeline(
+            embedder=args.embedder,
+            vectorstore=args.vectorstore,
+            chunk_size=args.chunk_size,
+            chunk_overlap=args.chunk_overlap,
+        )
     n_chunks = pipeline.ingest(args.path)
     pipeline.save(args.index)
-    print(f"Ingested {n_chunks} chunk(s) from {args.path!r} into index {args.index!r}.")
+    verb = "Added" if existing else "Ingested"
+    print(f"{verb} {n_chunks} chunk(s) from {args.path!r} into index {args.index!r}.")
 
 
 def cmd_query(args):

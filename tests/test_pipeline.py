@@ -54,3 +54,33 @@ def test_save_and_load_preserves_config_and_data(tmp_path):
     reloaded = Pipeline.load(index_path, llm="none")
     results = reloaded.retrieve("independent pet", top_k=1)
     assert "cat" in results[0][1].lower()
+
+
+def test_ingesting_more_documents_into_a_loaded_index_appends(tmp_path):
+    d = _sample_dir(tmp_path)
+    index_path = str(tmp_path / "index")
+
+    pipeline = Pipeline(embedder="hashing", vectorstore="numpy", llm="none")
+    pipeline.ingest(str(d))
+    pipeline.save(index_path)
+
+    # Simulate a second `easyrag ingest` run against the same --index: load
+    # the existing index and ingest more documents into it.
+    extra = tmp_path / "more_docs"
+    extra.mkdir()
+    (extra / "birds.txt").write_text(
+        "Birds are warm-blooded egg-laying vertebrates known for flight.",
+        encoding="utf-8",
+    )
+
+    reloaded = Pipeline.load(index_path, llm="none")
+    before = len(reloaded.vectorstore)
+    reloaded.ingest(str(extra))
+    reloaded.save(index_path)
+
+    final = Pipeline.load(index_path, llm="none")
+    assert len(final.vectorstore) > before
+    # The hashing embedder scores on literal token overlap, not true semantic
+    # similarity, so query with words that actually appear in the target doc.
+    results = final.retrieve("warm-blooded egg-laying vertebrates known for flight", top_k=1)
+    assert "bird" in results[0][1].lower()
