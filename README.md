@@ -58,9 +58,13 @@ OpenAI generation by changing one argument.
 
 | Stage      | Default (zero setup)        | Upgrade options |
 |------------|------------------------------|------------------|
-| Embedder   | `hashing` (numpy only)        | `local` (sentence-transformers), `openai` |
+| Embedder   | `hashing` (numpy only)        | `local` (sentence-transformers), `openai`, `llamacpp` (local GGUF model) |
 | Vector store | `numpy` (in-memory, brute-force) | `faiss` (approximate nearest neighbor, for larger corpora) |
-| Generator  | `none` (returns matched passages, no LLM call) | `anthropic` (Claude), `openai` (GPT) |
+| Generator  | `none` (returns matched passages, no LLM call) | `anthropic` (Claude), `openai` (GPT), `llamacpp` (local GGUF model) |
+
+`llamacpp` and `openai` are two different ways to run a fully local, free
+model with no API key — see [Running a local LLM with llama.cpp](#running-a-local-llm-with-llamacpp)
+below.
 
 ### Supported file types
 
@@ -84,7 +88,8 @@ pip install -e ".[docx]"         # + Word document support
 pip install -e ".[ocr]"          # + image support (also needs Tesseract OCR installed)
 pip install -e ".[local]"        # + real local embeddings (sentence-transformers, faiss)
 pip install -e ".[anthropic]"    # + Claude generation
-pip install -e ".[openai]"       # + OpenAI embeddings/generation
+pip install -e ".[openai]"       # + OpenAI embeddings/generation (or any OpenAI-compatible local server)
+pip install -e ".[llamacpp]"     # + fully local GGUF models, in-process, no server (see below)
 pip install -e ".[all]"          # everything
 ```
 
@@ -214,15 +219,108 @@ easyrag query "What is the refund policy?" --llm anthropic
 `anthropic`/`openai` providers read their API key from the standard
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` environment variables.
 
+## Running a local LLM with llama.cpp
+
+If you want generation (or embeddings) fully local and free — no API key,
+no per-token cost, no data leaving your machine — [llama.cpp](https://github.com/ggml-org/llama.cpp)
+is the standard way to run open models (Llama, Qwen, Mistral, and others) in
+the `GGUF` file format on ordinary CPUs, with optional GPU acceleration.
+There are two ways to use it here; pick whichever installs more easily on
+your machine.
+
+### Option A: in-process, one Python package (recommended to try first)
+
+```bash
+pip install easy-rag[llamacpp]
+```
+
+```python
+from easy_rag import Pipeline
+
+# No model_path needed -- the first time this runs, it downloads and caches
+# a small instruction-tuned model from Hugging Face Hub automatically.
+pipeline = Pipeline(embedder="llamacpp", llm="llamacpp")
+pipeline.ingest("./my_documents")
+print(pipeline.query("What is the refund policy?"))
+```
+
+```bash
+easyrag ingest ./my_documents --embedder llamacpp
+easyrag query "What is the refund policy?" --llm llamacpp
+```
+
+The defaults download `Qwen2.5-0.5B-Instruct-GGUF` (generation, ~400 MB) and
+`Qwen3-Embedding-0.6B-GGUF` (embeddings, ~400 MB) the first time each is
+used, cached by `huggingface-hub` afterward — check you have the bandwidth
+and disk space before relying on this in a constrained environment. To use
+a model you've already downloaded instead, point at the file directly and
+nothing is fetched over the network:
+
+```python
+pipeline = Pipeline(
+    embedder="llamacpp",
+    llm="llamacpp",
+    embedder_kwargs={"model_path": "/path/to/an-embedding-model.gguf"},
+    llm_kwargs={"model_path": "/path/to/a-chat-model.gguf"},
+)
+```
+
+```bash
+easyrag query "..." --llm llamacpp --model-path /path/to/a-chat-model.gguf
+```
+
+**Installation note:** `llama-cpp-python` ships prebuilt wheels for common
+platforms, but if none matches your Python version/OS/CPU, pip falls back to
+compiling llama.cpp from source, which needs a C++ toolchain (CMake + a
+compiler) and can take several minutes. **On Windows specifically**, this
+can fail with a path-length error during extraction — if you see a message
+about a path being too long, [enable Windows Long Path support](https://pip.pypa.io/warnings/enable-long-paths)
+and try again. If compiling is impractical on your machine, use Option B
+instead, which involves no Python compilation at all.
+
+### Option B: run `llama-server`, point the OpenAI provider at it
+
+llama.cpp's own server binary exposes an OpenAI-wire-compatible REST API
+(`/v1/chat/completions`, `/v1/embeddings`), so the existing `openai`
+provider can talk to it directly with a `base_url` override — no
+`llama-cpp-python` compilation required, since `llama-server` is a prebuilt
+executable you download once from the [llama.cpp releases page](https://github.com/ggml-org/llama.cpp/releases).
+
+```bash
+# In a separate terminal, after downloading llama-server and a .gguf model:
+./llama-server -m /path/to/model.gguf --port 8080
+```
+
+```python
+from easy_rag import Pipeline
+
+pipeline = Pipeline(
+    embedder="hashing",  # or "openai" pointed at an embedding-capable server
+    llm="openai",
+    llm_kwargs={
+        "model": "local-model",  # llama-server ignores this field but requires one
+        "base_url": "http://localhost:8080/v1",
+    },
+)
+```
+
+```bash
+easyrag query "..." --llm openai --model local-model --base-url http://localhost:8080/v1
+```
+
+(The CLI still reads `OPENAI_API_KEY` from the environment even for a local
+server that doesn't check it — set it to any placeholder string first,
+e.g. `export OPENAI_API_KEY=unused`.)
+
 ## Architecture
 
 ```
 easy_rag/
   loaders.py       load text/md/csv/pdf/docx/image files into Document objects
   chunking.py       split text into overlapping chunks at paragraph/sentence boundaries
-  embeddings.py      Embedder implementations: hashing (default), local, openai
+  embeddings.py      Embedder implementations: hashing (default), local, openai, llamacpp
   vectorstore.py      VectorStore implementations: numpy (default), faiss
-  llm.py                Generator implementations: none (default), anthropic, openai
+  llm.py                Generator implementations: none (default), anthropic, openai, llamacpp
   pipeline.py            Pipeline: wires the above together, incremental ingest, save()/load()
   sources.py               the list of folders an index ingests from
   watcher.py                 polling loop that auto-ingests new/changed files

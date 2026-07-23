@@ -70,13 +70,23 @@ class AnthropicGenerator(Generator):
 
 
 class OpenAIGenerator(Generator):
-    """Generation via the OpenAI API. Install with: pip install easy-rag[openai]
-    Requires the OPENAI_API_KEY environment variable.
+    """Generation via the OpenAI API, or any OpenAI-wire-compatible server.
+    Install with: pip install easy-rag[openai]
+    Requires the OPENAI_API_KEY environment variable (any non-empty string
+    if base_url points at a local server that doesn't check it).
+
+    Passing base_url lets this same class talk to a locally running
+    `llama-server` (from llama.cpp) instead of the real OpenAI API -- its
+    /v1/chat/completions endpoint is wire-compatible with OpenAI's. This is
+    often the path of least resistance on Windows, since llama-server is a
+    prebuilt executable with no Python package to compile -- see the
+    'llamacpp' generator below for the alternative that runs the model
+    in-process via the llama-cpp-python bindings instead.
     """
 
     name = "openai"
 
-    def __init__(self, model="gpt-4o-mini", prompt_template=DEFAULT_PROMPT_TEMPLATE):
+    def __init__(self, model="gpt-4o-mini", prompt_template=DEFAULT_PROMPT_TEMPLATE, base_url=None):
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -84,7 +94,7 @@ class OpenAIGenerator(Generator):
                 "The 'openai' generator requires the openai package. "
                 "Install it with: pip install easy-rag[openai]"
             ) from e
-        self._client = OpenAI()
+        self._client = OpenAI(base_url=base_url) if base_url else OpenAI()
         self._model = model
         self._template = prompt_template
 
@@ -98,16 +108,76 @@ class OpenAIGenerator(Generator):
         return response.choices[0].message.content
 
 
+class LlamaCppGenerator(Generator):
+    """Fully local generation via llama.cpp, in-process -- no server to run,
+    no API key, no internet needed after the model is downloaded once.
+    Install with: pip install easy-rag[llamacpp]
+
+    With no model_path given, downloads (and caches) a small instruction-
+    tuned GGUF model from Hugging Face Hub the first time it's used -- see
+    the README for the exact model and its size before relying on this in
+    an environment with restricted bandwidth or disk space. Pass model_path
+    to a local .gguf file instead to use your own model and skip the
+    download entirely.
+    """
+
+    name = "llamacpp"
+
+    DEFAULT_REPO = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+    DEFAULT_FILENAME = "*q4_k_m.gguf"
+
+    def __init__(
+        self,
+        model_path=None,
+        repo_id=None,
+        filename=None,
+        n_ctx=4096,
+        max_tokens=512,
+        prompt_template=DEFAULT_PROMPT_TEMPLATE,
+        **llama_kwargs,
+    ):
+        try:
+            from llama_cpp import Llama
+        except ImportError as e:
+            raise ImportError(
+                "The 'llamacpp' generator requires llama-cpp-python. "
+                "Install it with: pip install easy-rag[llamacpp]"
+            ) from e
+        if model_path:
+            self._llm = Llama(model_path=model_path, n_ctx=n_ctx, verbose=False, **llama_kwargs)
+        else:
+            self._llm = Llama.from_pretrained(
+                repo_id=repo_id or self.DEFAULT_REPO,
+                filename=filename or self.DEFAULT_FILENAME,
+                n_ctx=n_ctx,
+                verbose=False,
+                **llama_kwargs,
+            )
+        self._max_tokens = max_tokens
+        self._template = prompt_template
+
+    def generate(self, question, contexts):
+        context_text = "\n\n".join(text for _score, text, _source in contexts)
+        prompt = self._template.format(context=context_text, question=question)
+        response = self._llm.create_chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=self._max_tokens,
+        )
+        return response["choices"][0]["message"]["content"]
+
+
 _REGISTRY = {
     "none": RetrievalOnlyGenerator,
     "anthropic": AnthropicGenerator,
     "openai": OpenAIGenerator,
+    "llamacpp": LlamaCppGenerator,
 }
 
 
 def get_generator(name="none", **kwargs):
     """Look up a generator by name: 'none' (default, zero deps/keys),
-    'anthropic' (Claude API), or 'openai' (OpenAI API)."""
+    'anthropic' (Claude API), 'openai' (OpenAI API, or any OpenAI-compatible
+    server via base_url), or 'llamacpp' (fully local GGUF model, no server)."""
     try:
         cls = _REGISTRY[name]
     except KeyError:

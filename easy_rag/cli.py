@@ -55,8 +55,14 @@ def cmd_ingest(args):
 
 
 def cmd_query(args):
-    llm_kwargs = {"model": args.model} if args.model else None
-    pipeline = Pipeline.load(args.index, llm=args.llm, llm_kwargs=llm_kwargs)
+    llm_kwargs = {}
+    if args.model:
+        llm_kwargs["model"] = args.model
+    if args.model_path:
+        llm_kwargs["model_path"] = args.model_path
+    if args.base_url:
+        llm_kwargs["base_url"] = args.base_url
+    pipeline = Pipeline.load(args.index, llm=args.llm, llm_kwargs=llm_kwargs or None)
     answer = pipeline.query(args.question, top_k=args.top_k)
     print(answer)
 
@@ -112,7 +118,7 @@ def build_parser():
     p_ingest = sub.add_parser("ingest", help="Load, chunk, embed, and index documents.")
     p_ingest.add_argument("path", nargs="?", default=None, help="File or directory to ingest. Omit to ingest all registered source folders instead.")
     _add_common_args(p_ingest)
-    p_ingest.add_argument("--embedder", default="hashing", choices=["hashing", "local", "openai"])
+    p_ingest.add_argument("--embedder", default="hashing", choices=["hashing", "local", "openai", "llamacpp"])
     p_ingest.add_argument("--vectorstore", default="numpy", choices=["numpy", "faiss"])
     p_ingest.add_argument("--chunk-size", type=int, default=800)
     p_ingest.add_argument("--chunk-overlap", type=int, default=120)
@@ -121,8 +127,10 @@ def build_parser():
     p_query = sub.add_parser("query", help="Ask a question against a previously built index.")
     p_query.add_argument("question")
     _add_common_args(p_query)
-    p_query.add_argument("--llm", default="none", choices=["none", "anthropic", "openai"])
+    p_query.add_argument("--llm", default="none", choices=["none", "anthropic", "openai", "llamacpp"])
     p_query.add_argument("--model", default=None, help="Override the default model for the chosen --llm provider")
+    p_query.add_argument("--model-path", default=None, help="Local .gguf file path (only used with --llm llamacpp; omit to auto-download a small default model)")
+    p_query.add_argument("--base-url", default=None, help="Point --llm openai at a local OpenAI-compatible server instead of the real OpenAI API (e.g. a running llama-server)")
     p_query.add_argument("--top-k", type=int, default=4)
     p_query.set_defaults(func=cmd_query)
 
@@ -146,7 +154,7 @@ def build_parser():
     p_watch = sub.add_parser("watch", help="Continuously watch registered source folders and auto-ingest new/changed files.")
     _add_common_args(p_watch)
     p_watch.add_argument("--interval", type=int, default=5, help="Seconds between folder scans (default: 5)")
-    p_watch.add_argument("--embedder", default="hashing", choices=["hashing", "local", "openai"])
+    p_watch.add_argument("--embedder", default="hashing", choices=["hashing", "local", "openai", "llamacpp"])
     p_watch.add_argument("--vectorstore", default="numpy", choices=["numpy", "faiss"])
     p_watch.add_argument("--chunk-size", type=int, default=800)
     p_watch.add_argument("--chunk-overlap", type=int, default=120)

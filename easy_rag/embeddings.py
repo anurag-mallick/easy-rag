@@ -92,13 +92,21 @@ _OPENAI_EMBEDDING_DIMS = {
 
 
 class OpenAIEmbedder(Embedder):
-    """Embeddings via the OpenAI API. Install with: pip install easy-rag[openai]
-    Requires the OPENAI_API_KEY environment variable.
+    """Embeddings via the OpenAI API, or any OpenAI-wire-compatible server.
+    Install with: pip install easy-rag[openai]
+    Requires the OPENAI_API_KEY environment variable (any non-empty string
+    if base_url points at a local server that doesn't check it).
+
+    Passing base_url lets this same class talk to a locally running
+    `llama-server` (from llama.cpp) instead of the real OpenAI API -- its
+    /v1/embedding endpoint is wire-compatible with the OpenAI embeddings API.
+    See the 'llamacpp' embedder below for an alternative that runs the model
+    in-process instead of managing a separate server.
     """
 
     name = "openai"
 
-    def __init__(self, model="text-embedding-3-small"):
+    def __init__(self, model="text-embedding-3-small", base_url=None, dim=None):
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -106,14 +114,23 @@ class OpenAIEmbedder(Embedder):
                 "The 'openai' embedder requires the openai package. "
                 "Install it with: pip install easy-rag[openai]"
             ) from e
-        self._client = OpenAI()
+        self._client = OpenAI(base_url=base_url) if base_url else OpenAI()
         self._model = model
-        if model not in _OPENAI_EMBEDDING_DIMS:
+        if dim is not None:
+            # Talking to a local/self-hosted server serving a model OpenAI
+            # doesn't know about -- the caller must state its dimension.
+            self.dim = dim
+        elif model in _OPENAI_EMBEDDING_DIMS:
+            self.dim = _OPENAI_EMBEDDING_DIMS[model]
+        elif base_url:
+            raise ValueError(
+                f"Unknown model '{model}' for a custom base_url; pass dim=<embedding size> explicitly."
+            )
+        else:
             raise ValueError(
                 f"Unknown OpenAI embedding model '{model}'; dim can't be inferred safely. "
                 f"Known models: {sorted(_OPENAI_EMBEDDING_DIMS)}"
             )
-        self.dim = _OPENAI_EMBEDDING_DIMS[model]
 
     def embed(self, texts):
         resp = self._client.embeddings.create(model=self._model, input=list(texts))
@@ -123,16 +140,63 @@ class OpenAIEmbedder(Embedder):
         return vecs / norms
 
 
+class LlamaCppEmbedder(Embedder):
+    """Fully local embeddings via llama.cpp, in-process -- no server to run,
+    no API key, no internet needed after the model is downloaded once.
+    Install with: pip install easy-rag[llamacpp]
+
+    With no model_path given, downloads (and caches) a small embedding GGUF
+    model from Hugging Face Hub the first time it's used -- see the README
+    for the exact model and its size before relying on this in an
+    environment with restricted bandwidth or disk space.
+    """
+
+    name = "llamacpp"
+
+    DEFAULT_REPO = "Qwen/Qwen3-Embedding-0.6B-GGUF"
+    DEFAULT_FILENAME = "*q4_k_m.gguf"
+
+    def __init__(self, model_path=None, repo_id=None, filename=None, n_ctx=2048, **llama_kwargs):
+        try:
+            from llama_cpp import Llama
+        except ImportError as e:
+            raise ImportError(
+                "The 'llamacpp' embedder requires llama-cpp-python. "
+                "Install it with: pip install easy-rag[llamacpp]"
+            ) from e
+        if model_path:
+            self._llm = Llama(model_path=model_path, embedding=True, n_ctx=n_ctx, verbose=False, **llama_kwargs)
+        else:
+            self._llm = Llama.from_pretrained(
+                repo_id=repo_id or self.DEFAULT_REPO,
+                filename=filename or self.DEFAULT_FILENAME,
+                embedding=True,
+                n_ctx=n_ctx,
+                verbose=False,
+                **llama_kwargs,
+            )
+        self.dim = self._llm.n_embd()
+
+    def embed(self, texts):
+        resp = self._llm.create_embedding(list(texts))
+        vecs = np.array([d["embedding"] for d in resp["data"]], dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return vecs / norms
+
+
 _REGISTRY = {
     "hashing": HashingEmbedder,
     "local": SentenceTransformerEmbedder,
     "openai": OpenAIEmbedder,
+    "llamacpp": LlamaCppEmbedder,
 }
 
 
 def get_embedder(name="hashing", **kwargs):
     """Look up an embedder by name: 'hashing' (default, zero deps), 'local'
-    (sentence-transformers), or 'openai' (OpenAI API)."""
+    (sentence-transformers), 'openai' (OpenAI API, or any OpenAI-compatible
+    server via base_url), or 'llamacpp' (fully local GGUF model, no server)."""
     try:
         cls = _REGISTRY[name]
     except KeyError:
