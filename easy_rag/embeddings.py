@@ -140,6 +140,53 @@ class OpenAIEmbedder(Embedder):
         return vecs / norms
 
 
+# Dimensions of Google's current Gemini embedding models. gemini-embedding-001
+# supports Matryoshka Representation Learning (configurable smaller output
+# sizes via output_dim below), but its un-truncated default is 3072.
+_GEMINI_EMBEDDING_DIMS = {
+    "gemini-embedding-001": 3072,
+    "text-embedding-004": 768,
+}
+
+
+class GeminiEmbedder(Embedder):
+    """Embeddings via Google's Gemini API. Install with: pip install easy-rag[gemini]
+    Requires the GEMINI_API_KEY environment variable.
+    """
+
+    name = "gemini"
+
+    def __init__(self, model="gemini-embedding-001", output_dim=None):
+        try:
+            from google import genai
+        except ImportError as e:
+            raise ImportError(
+                "The 'gemini' embedder requires the google-genai package. "
+                "Install it with: pip install easy-rag[gemini]"
+            ) from e
+        self._genai = genai
+        self._client = genai.Client()
+        self._model = model
+        self._output_dim = output_dim
+        if output_dim is not None:
+            self.dim = output_dim
+        elif model in _GEMINI_EMBEDDING_DIMS:
+            self.dim = _GEMINI_EMBEDDING_DIMS[model]
+        else:
+            raise ValueError(
+                f"Unknown Gemini embedding model '{model}'; dim can't be inferred safely. "
+                f"Known models: {sorted(_GEMINI_EMBEDDING_DIMS)}, or pass output_dim=<size> explicitly."
+            )
+
+    def embed(self, texts):
+        config = {"output_dimensionality": self._output_dim} if self._output_dim else None
+        resp = self._client.models.embed_content(model=self._model, contents=list(texts), config=config)
+        vecs = np.array([e.values for e in resp.embeddings], dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return vecs / norms
+
+
 class LlamaCppEmbedder(Embedder):
     """Fully local embeddings via llama.cpp, in-process -- no server to run,
     no API key, no internet needed after the model is downloaded once.
@@ -189,6 +236,7 @@ _REGISTRY = {
     "hashing": HashingEmbedder,
     "local": SentenceTransformerEmbedder,
     "openai": OpenAIEmbedder,
+    "gemini": GeminiEmbedder,
     "llamacpp": LlamaCppEmbedder,
 }
 
@@ -196,7 +244,8 @@ _REGISTRY = {
 def get_embedder(name="hashing", **kwargs):
     """Look up an embedder by name: 'hashing' (default, zero deps), 'local'
     (sentence-transformers), 'openai' (OpenAI API, or any OpenAI-compatible
-    server via base_url), or 'llamacpp' (fully local GGUF model, no server)."""
+    server via base_url), 'gemini' (Google's Gemini API), or 'llamacpp'
+    (fully local GGUF model, no server)."""
     try:
         cls = _REGISTRY[name]
     except KeyError:

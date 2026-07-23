@@ -71,6 +71,80 @@ def test_openai_embedder_base_url_with_explicit_dim_is_accepted(monkeypatch):
     assert str(embedder._client.base_url).startswith("http://localhost:8080/v1")
 
 
+def test_known_gemini_model_dims_are_correct():
+    from easy_rag.embeddings import _GEMINI_EMBEDDING_DIMS
+
+    assert _GEMINI_EMBEDDING_DIMS["gemini-embedding-001"] == 3072
+    assert _GEMINI_EMBEDDING_DIMS["text-embedding-004"] == 768
+
+
+def test_gemini_embedder_requires_install_with_helpful_message(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "google":  # `from google import genai` imports "google", not "google.genai"
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    from easy_rag.embeddings import GeminiEmbedder
+
+    with pytest.raises(ImportError, match=r"easy-rag\[gemini\]"):
+        GeminiEmbedder()
+
+
+def test_gemini_embedder_rejects_unknown_model_without_output_dim(monkeypatch):
+    genai = pytest.importorskip("google.genai", reason="google-genai package not installed")
+    monkeypatch.setenv("GEMINI_API_KEY", "unused-placeholder")
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+
+    from easy_rag.embeddings import GeminiEmbedder
+
+    with pytest.raises(ValueError, match="Unknown Gemini embedding model"):
+        GeminiEmbedder(model="some-future-model-name")
+
+
+def test_gemini_embedder_wiring_with_a_stubbed_client(monkeypatch):
+    # Verifies our extraction/normalization code without a real network call:
+    # stub genai.Client itself so this stays a fast, offline unit test.
+    genai = pytest.importorskip("google.genai", reason="google-genai package not installed")
+    monkeypatch.setenv("GEMINI_API_KEY", "unused-placeholder")
+
+    class FakeEmbedding:
+        def __init__(self, values):
+            self.values = values
+
+    class FakeResponse:
+        def __init__(self, embeddings):
+            self.embeddings = embeddings
+
+    class FakeModels:
+        def embed_content(self, model, contents, config=None):
+            return FakeResponse([FakeEmbedding([1.0, 0.0, 0.0]) for _ in contents])
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+
+    from easy_rag.embeddings import GeminiEmbedder
+
+    embedder = GeminiEmbedder(model="gemini-embedding-001", output_dim=3)
+    assert embedder.dim == 3
+    vectors = embedder.embed(["a", "b"])
+    assert vectors.shape == (2, 3)
+    assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0)
+
+
 def test_llamacpp_embedder_requires_install_with_helpful_message(monkeypatch):
     import builtins
 

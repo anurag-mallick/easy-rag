@@ -31,6 +31,54 @@ def test_openai_generator_base_url_points_at_a_local_server(monkeypatch):
     assert str(generator._client.base_url).startswith("http://localhost:8080/v1")
 
 
+def test_gemini_generator_requires_install_with_helpful_message(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "google":  # `from google import genai` imports "google", not "google.genai"
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    from easy_rag.llm import GeminiGenerator
+
+    with pytest.raises(ImportError, match=r"easy-rag\[gemini\]"):
+        GeminiGenerator()
+
+
+def test_gemini_generator_wiring_with_a_stubbed_client(monkeypatch):
+    genai = pytest.importorskip("google.genai", reason="google-genai package not installed")
+    monkeypatch.setenv("GEMINI_API_KEY", "unused-placeholder")
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            assert "What is the refund window?" in contents
+            assert "30 days" in contents  # the context was interpolated in
+            return FakeResponse("The refund window is 30 days.")
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+
+    from easy_rag.llm import GeminiGenerator
+
+    generator = GeminiGenerator()
+    answer = generator.generate(
+        "What is the refund window?",
+        [(0.9, "The refund window is 30 days.", "policy.txt")],
+    )
+    assert answer == "The refund window is 30 days."
+
+
 def test_llamacpp_generator_requires_install_with_helpful_message(monkeypatch):
     import builtins
 

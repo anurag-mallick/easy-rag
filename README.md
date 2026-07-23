@@ -58,13 +58,17 @@ OpenAI generation by changing one argument.
 
 | Stage      | Default (zero setup)        | Upgrade options |
 |------------|------------------------------|------------------|
-| Embedder   | `hashing` (numpy only)        | `local` (sentence-transformers), `openai`, `llamacpp` (local GGUF model) |
+| Embedder   | `hashing` (numpy only)        | `local` (sentence-transformers), `openai`, `gemini` (Google), `llamacpp` (local GGUF model) |
 | Vector store | `numpy` (in-memory, brute-force) | `faiss` (approximate nearest neighbor, for larger corpora) |
-| Generator  | `none` (returns matched passages, no LLM call) | `anthropic` (Claude), `openai` (GPT), `llamacpp` (local GGUF model) |
+| Generator  | `none` (returns matched passages, no LLM call) | `anthropic` (Claude), `openai` (GPT), `gemini` (Google), `llamacpp` (local GGUF model) |
 
-`llamacpp` and `openai` are two different ways to run a fully local, free
-model with no API key — see [Running a local LLM with llama.cpp](#running-a-local-llm-with-llamacpp)
-below.
+`llamacpp` and `openai` (pointed at a local server) are two different ways
+to run a fully local, free model with no API key — see [Running a local LLM
+with llama.cpp](#running-a-local-llm-with-llamacpp) below. `anthropic`,
+`openai`, and `gemini` are the three major hosted API providers; switching
+between them (or between any of the five generator/embedder choices) is a
+one-argument change, since every provider implements the same small
+interface (see [Architecture](#architecture)).
 
 ### Supported file types
 
@@ -89,6 +93,7 @@ pip install -e ".[ocr]"          # + image support (also needs Tesseract OCR ins
 pip install -e ".[local]"        # + real local embeddings (sentence-transformers, faiss)
 pip install -e ".[anthropic]"    # + Claude generation
 pip install -e ".[openai]"       # + OpenAI embeddings/generation (or any OpenAI-compatible local server)
+pip install -e ".[gemini]"       # + Google Gemini embeddings/generation
 pip install -e ".[llamacpp]"     # + fully local GGUF models, in-process, no server (see below)
 pip install -e ".[all]"          # everything
 ```
@@ -205,19 +210,31 @@ pipeline = Pipeline.load(index_path) if os.path.exists(index_path + ".config.jso
 watch(pipeline, load_sources(index_path), index_path, interval=5)
 ```
 
-### Upgrading to real embeddings and Claude
+### Upgrading to real embeddings and a hosted LLM
+
+Claude, OpenAI, and Gemini are supported as drop-in alternatives — swap the
+`llm=`/`embedder=` argument, nothing else changes:
 
 ```python
-pipeline = Pipeline(embedder="local", vectorstore="faiss", llm="anthropic")
+pipeline = Pipeline(embedder="local", vectorstore="faiss", llm="anthropic")   # Claude
+pipeline = Pipeline(embedder="openai", vectorstore="faiss", llm="openai")      # OpenAI
+pipeline = Pipeline(embedder="gemini", vectorstore="faiss", llm="gemini")      # Google Gemini
 ```
 
 ```bash
 easyrag ingest ./my_documents --embedder local --vectorstore faiss
 easyrag query "What is the refund policy?" --llm anthropic
+easyrag query "What is the refund policy?" --llm openai --model gpt-4o-mini
+easyrag query "What is the refund policy?" --llm gemini --model gemini-2.5-flash
 ```
 
-`anthropic`/`openai` providers read their API key from the standard
-`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` environment variables.
+Each provider reads its API key from the standard environment variable:
+`ANTHROPIC_API_KEY` (Claude), `OPENAI_API_KEY` (OpenAI), `GEMINI_API_KEY`
+(Google). Model names shown are sensible current defaults, not the only
+option — pass `--model` (CLI) or `model=` (`llm_kwargs`/`embedder_kwargs`)
+to use whichever model your account has access to; all three providers
+release new models faster than any hardcoded default can track, so check
+each provider's current model list if a default ever stops working.
 
 ## Running a local LLM with llama.cpp
 
@@ -318,9 +335,9 @@ e.g. `export OPENAI_API_KEY=unused`.)
 easy_rag/
   loaders.py       load text/md/csv/pdf/docx/image files into Document objects
   chunking.py       split text into overlapping chunks at paragraph/sentence boundaries
-  embeddings.py      Embedder implementations: hashing (default), local, openai, llamacpp
+  embeddings.py      Embedder implementations: hashing (default), local, openai, gemini, llamacpp
   vectorstore.py      VectorStore implementations: numpy (default), faiss
-  llm.py                Generator implementations: none (default), anthropic, openai, llamacpp
+  llm.py                Generator implementations: none (default), anthropic, openai, gemini, llamacpp
   pipeline.py            Pipeline: wires the above together, incremental ingest, save()/load()
   sources.py               the list of folders an index ingests from
   watcher.py                 polling loop that auto-ingests new/changed files

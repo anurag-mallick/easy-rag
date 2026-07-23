@@ -108,6 +108,32 @@ class OpenAIGenerator(Generator):
         return response.choices[0].message.content
 
 
+class GeminiGenerator(Generator):
+    """Generation via Google's Gemini API. Install with: pip install easy-rag[gemini]
+    Requires the GEMINI_API_KEY environment variable.
+    """
+
+    name = "gemini"
+
+    def __init__(self, model="gemini-2.5-flash", prompt_template=DEFAULT_PROMPT_TEMPLATE):
+        try:
+            from google import genai
+        except ImportError as e:
+            raise ImportError(
+                "The 'gemini' generator requires the google-genai package. "
+                "Install it with: pip install easy-rag[gemini]"
+            ) from e
+        self._client = genai.Client()
+        self._model = model
+        self._template = prompt_template
+
+    def generate(self, question, contexts):
+        context_text = "\n\n".join(text for _score, text, _source in contexts)
+        prompt = self._template.format(context=context_text, question=question)
+        response = self._client.models.generate_content(model=self._model, contents=prompt)
+        return response.text
+
+
 class LlamaCppGenerator(Generator):
     """Fully local generation via llama.cpp, in-process -- no server to run,
     no API key, no internet needed after the model is downloaded once.
@@ -170,6 +196,7 @@ _REGISTRY = {
     "none": RetrievalOnlyGenerator,
     "anthropic": AnthropicGenerator,
     "openai": OpenAIGenerator,
+    "gemini": GeminiGenerator,
     "llamacpp": LlamaCppGenerator,
 }
 
@@ -177,7 +204,8 @@ _REGISTRY = {
 def get_generator(name="none", **kwargs):
     """Look up a generator by name: 'none' (default, zero deps/keys),
     'anthropic' (Claude API), 'openai' (OpenAI API, or any OpenAI-compatible
-    server via base_url), or 'llamacpp' (fully local GGUF model, no server)."""
+    server via base_url), 'gemini' (Google's Gemini API), or 'llamacpp'
+    (fully local GGUF model, no server)."""
     try:
         cls = _REGISTRY[name]
     except KeyError:
