@@ -145,3 +145,30 @@ def test_modifying_an_ingested_file_replaces_its_chunks_not_duplicates_them(tmp_
     assert not any("low-maintenance" in c.lower() for c in pipeline.vectorstore._chunks)
     # Total = everything before, minus cats.txt's old chunks, plus its new ones.
     assert len(pipeline.vectorstore) == before_total - before_cats_chunks + added
+
+
+def test_failed_embedding_does_not_corrupt_manifest_or_lose_old_chunks(tmp_path):
+    """If embedding raises partway through ingest(), nothing should be
+    mutated -- the manifest must not be marked up to date (or the file's
+    content would be silently lost forever, since it'd never be retried),
+    and a changed file's old chunks must not have been removed already."""
+    pipeline = Pipeline(embedder="hashing", vectorstore="numpy", llm="none")
+    d = _sample_dir(tmp_path)
+    pipeline.ingest(str(d))
+    before_chunks = list(pipeline.vectorstore._chunks)
+    before_manifest = dict(pipeline._manifest)
+
+    (d / "new_file.txt").write_text("Some new content that will fail to embed.", encoding="utf-8")
+
+    def boom(_texts):
+        raise RuntimeError("simulated embedder failure (e.g. API down)")
+
+    pipeline.embedder.embed = boom
+    try:
+        pipeline.ingest(str(d))
+        assert False, "expected the simulated embedder failure to raise"
+    except RuntimeError:
+        pass
+
+    assert pipeline.vectorstore._chunks == before_chunks
+    assert pipeline._manifest == before_manifest

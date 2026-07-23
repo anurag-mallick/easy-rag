@@ -57,7 +57,7 @@ class Pipeline:
         Returns the number of chunks added.
         """
         documents = load_documents(path)
-        all_chunks, all_sources = [], []
+        to_process = []  # (abs_source, fingerprint, chunks) for changed files
         for doc in documents:
             # Always key by the absolute path, so the same file ingested via
             # a relative path one time and an absolute path another still
@@ -67,16 +67,30 @@ class Pipeline:
             fingerprint = [stat.st_mtime, stat.st_size]
             if not force and self._manifest.get(abs_source) == fingerprint:
                 continue
+            chunks = split_text(doc.text, self.chunk_size, self.chunk_overlap)
+            to_process.append((abs_source, fingerprint, chunks))
+
+        if not to_process:
+            return 0
+
+        all_chunks, all_sources = [], []
+        for abs_source, _fingerprint, chunks in to_process:
+            all_chunks.extend(chunks)
+            all_sources.extend([abs_source] * len(chunks))
+
+        # Embed before mutating any state. If this raises (a network error
+        # for an API-backed embedder, say), nothing below has run yet, so a
+        # failed ingest leaves the manifest and vector store exactly as they
+        # were -- the file is retried on the next ingest() call instead of
+        # being wrongly marked done with its content silently lost.
+        vectors = self.embedder.embed(all_chunks) if all_chunks else None
+
+        for abs_source, fingerprint, _chunks in to_process:
             if abs_source in self._manifest:
                 self.vectorstore.remove_source(abs_source)
-            for chunk in split_text(doc.text, self.chunk_size, self.chunk_overlap):
-                all_chunks.append(chunk)
-                all_sources.append(abs_source)
             self._manifest[abs_source] = fingerprint
-        if not all_chunks:
-            return 0
-        vectors = self.embedder.embed(all_chunks)
-        self.vectorstore.add(vectors, all_chunks, all_sources)
+        if all_chunks:
+            self.vectorstore.add(vectors, all_chunks, all_sources)
         return len(all_chunks)
 
     def retrieve(self, question, top_k=4):

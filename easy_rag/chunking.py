@@ -29,8 +29,13 @@ def split_text(text, chunk_size=800, overlap=120):
     consecutive chunks so a fact split across a boundary is still findable."""
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError("overlap must be >= 0 and less than chunk_size")
+    if overlap < 0 or overlap > chunk_size // 2:
+        raise ValueError(
+            "overlap must be >= 0 and at most half of chunk_size -- each new "
+            "chunk only advances by (chunk_size - overlap) characters, so a "
+            "larger overlap makes chunking produce an explosively large "
+            "number of chunks for even modest-sized documents"
+        )
 
     paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT.split(text) if p.strip()]
     units = []

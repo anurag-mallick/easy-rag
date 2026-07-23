@@ -42,6 +42,17 @@ def test_missing_path_raises():
         load_documents("this/path/does/not/exist")
 
 
+def test_corrupt_file_is_skipped_without_losing_other_valid_files(tmp_path):
+    (tmp_path / "good.txt").write_text("this is a perfectly fine document", encoding="utf-8")
+    # pypdf will raise on this -- it's not a real PDF, just garbage bytes.
+    (tmp_path / "corrupt.pdf").write_bytes(b"not a real pdf, just garbage bytes")
+
+    docs = load_documents(str(tmp_path))
+
+    assert len(docs) == 1
+    assert docs[0].text == "this is a perfectly fine document"
+
+
 def test_docx_without_dependency_raises_helpful_error(tmp_path, monkeypatch):
     import builtins
 

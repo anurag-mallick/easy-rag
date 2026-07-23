@@ -95,10 +95,13 @@ def cmd_watch(args):
         if n_chunks:
             print(f"Added {n_chunks} chunk(s).")
 
+    def on_error(folder, error):
+        print(f"Warning: failed to ingest {folder!r}: {error} (will retry next scan)", file=sys.stderr)
+
     print(f"Watching {len(folders)} folder(s) for {args.index!r} (checking every {args.interval}s, Ctrl+C to stop):")
     for f in folders:
         print(f"  {f}")
-    watch_loop(pipeline, folders, args.index, interval=args.interval, on_scan=on_scan)
+    watch_loop(pipeline, folders, args.index, interval=args.interval, on_scan=on_scan, on_error=on_error)
     print("Stopped watching.")
 
 

@@ -81,6 +81,16 @@ class SentenceTransformerEmbedder(Embedder):
         return np.asarray(vecs, dtype=np.float32)
 
 
+# Dimensions of OpenAI's current embedding models, keyed by model name --
+# NOT derivable from the name alone (e.g. "text-embedding-ada-002" contains
+# neither "small" nor "large" but is 1536-dimensional, the same as -3-small).
+_OPENAI_EMBEDDING_DIMS = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
+
 class OpenAIEmbedder(Embedder):
     """Embeddings via the OpenAI API. Install with: pip install easy-rag[openai]
     Requires the OPENAI_API_KEY environment variable.
@@ -98,7 +108,12 @@ class OpenAIEmbedder(Embedder):
             ) from e
         self._client = OpenAI()
         self._model = model
-        self.dim = 1536 if "small" in model else 3072
+        if model not in _OPENAI_EMBEDDING_DIMS:
+            raise ValueError(
+                f"Unknown OpenAI embedding model '{model}'; dim can't be inferred safely. "
+                f"Known models: {sorted(_OPENAI_EMBEDDING_DIMS)}"
+            )
+        self.dim = _OPENAI_EMBEDDING_DIMS[model]
 
     def embed(self, texts):
         resp = self._client.embeddings.create(model=self._model, input=list(texts))

@@ -79,7 +79,12 @@ class NumpyVectorStore(VectorStore):
             json.dump({"chunks": self._chunks, "sources": self._sources}, f)
 
     def load(self, path):
-        self._vectors = np.load(path + ".vectors.npy")
+        vectors = np.load(path + ".vectors.npy")
+        # An index saved before anything was ever added stores a (0, 0)
+        # placeholder (see save()). Keeping that as-is instead of None would
+        # make the next add() try to np.vstack it against real (N, dim)
+        # vectors and crash on a dimension mismatch.
+        self._vectors = vectors if vectors.size > 0 else None
         with open(path + ".meta.json", "r", encoding="utf-8") as f:
             meta = json.load(f)
         self._chunks = meta["chunks"]

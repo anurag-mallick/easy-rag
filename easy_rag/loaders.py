@@ -107,10 +107,23 @@ def load_documents(path):
     for p in sorted(paths):
         ext = os.path.splitext(p)[1].lower()
         if ext in TEXT_EXTENSIONS:
-            text = _load_text_file(p)
+            loader = _load_text_file
         elif ext in _LOADERS:
-            text = _LOADERS[ext](p)
+            loader = _LOADERS[ext]
         else:
+            continue
+        try:
+            text = loader(p)
+        except ImportError:
+            # A missing optional dependency is a setup problem the user
+            # needs to fix (the error message tells them the exact `pip
+            # install` command) -- never swallow it silently.
+            raise
+        except Exception:
+            # Any other failure (corrupt file, unreadable/locked file, OCR
+            # failure, ...) means this one file is unreadable, not that the
+            # whole batch should be discarded -- skip it and keep going, so
+            # one bad file doesn't lose every other valid file in the folder.
             continue
         if text.strip():
             documents.append(Document(text=text, source=p))
