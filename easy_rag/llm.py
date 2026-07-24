@@ -15,6 +15,14 @@ Question: {question}
 
 Answer:"""
 
+# Returned by every generator (instead of making an API call over an empty
+# or near-empty prompt) when retrieve() found nothing -- either the index
+# is empty, or a min_score threshold filtered everything out because
+# nothing ingested was actually relevant to the question. Skipping the call
+# avoids paying for/waiting on a request that would otherwise ask the model
+# to answer from no context at all.
+NO_CONTEXT_MESSAGE = "No relevant context was found for this question."
+
 
 class Generator:
     name = "base"
@@ -32,7 +40,7 @@ class RetrievalOnlyGenerator(Generator):
 
     def generate(self, question, contexts):
         if not contexts:
-            return "No relevant context was found for this question."
+            return NO_CONTEXT_MESSAGE
         lines = [f"Top matching passages for: {question!r}\n"]
         for i, (score, text, source) in enumerate(contexts, 1):
             lines.append(f"[{i}] (score={score:.3f}, source={source})\n{text}\n")
@@ -59,6 +67,8 @@ class AnthropicGenerator(Generator):
         self._template = prompt_template
 
     def generate(self, question, contexts):
+        if not contexts:
+            return NO_CONTEXT_MESSAGE
         context_text = "\n\n".join(text for _score, text, _source in contexts)
         prompt = self._template.format(context=context_text, question=question)
         response = self._client.messages.create(
@@ -99,6 +109,8 @@ class OpenAIGenerator(Generator):
         self._template = prompt_template
 
     def generate(self, question, contexts):
+        if not contexts:
+            return NO_CONTEXT_MESSAGE
         context_text = "\n\n".join(text for _score, text, _source in contexts)
         prompt = self._template.format(context=context_text, question=question)
         response = self._client.chat.completions.create(
@@ -128,6 +140,8 @@ class GeminiGenerator(Generator):
         self._template = prompt_template
 
     def generate(self, question, contexts):
+        if not contexts:
+            return NO_CONTEXT_MESSAGE
         context_text = "\n\n".join(text for _score, text, _source in contexts)
         prompt = self._template.format(context=context_text, question=question)
         response = self._client.models.generate_content(model=self._model, contents=prompt)
@@ -183,6 +197,8 @@ class LlamaCppGenerator(Generator):
         self._template = prompt_template
 
     def generate(self, question, contexts):
+        if not contexts:
+            return NO_CONTEXT_MESSAGE
         context_text = "\n\n".join(text for _score, text, _source in contexts)
         prompt = self._template.format(context=context_text, question=question)
         response = self._llm.create_chat_completion(

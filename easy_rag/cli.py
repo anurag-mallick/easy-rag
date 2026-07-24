@@ -64,7 +64,7 @@ def cmd_query(args):
     if args.base_url:
         llm_kwargs["base_url"] = args.base_url
     pipeline = Pipeline.load(args.index, llm=args.llm, llm_kwargs=llm_kwargs or None)
-    answer = pipeline.query(args.question, top_k=args.top_k)
+    answer = pipeline.query(args.question, top_k=args.top_k, min_score=args.min_score)
     print(answer)
 
 
@@ -134,6 +134,7 @@ def build_parser():
     p_query.add_argument("--model-path", default=None, help="Local .gguf file path (only used with --llm llamacpp; omit to auto-download a small default model)")
     p_query.add_argument("--base-url", default=None, help="Point --llm openai at a local OpenAI-compatible server instead of the real OpenAI API (e.g. a running llama-server)")
     p_query.add_argument("--top-k", type=int, default=4)
+    p_query.add_argument("--min-score", type=float, default=None, help="Drop results below this similarity score instead of always returning top-k regardless of relevance (threshold is embedder-specific -- see retrieve()'s docstring)")
     p_query.set_defaults(func=cmd_query)
 
     p_sources = sub.add_parser("sources", help="Manage which folders an index ingests from.")

@@ -21,6 +21,18 @@ def test_ingest_then_query_roundtrip(tmp_path, capsys):
     assert "30 days" in out
 
 
+def test_query_with_min_score_filters_out_irrelevant_matches(tmp_path, capsys):
+    docs = _make_docs(tmp_path)
+    index = str(tmp_path / "index")
+
+    main(["ingest", str(docs), "--index", index])
+    capsys.readouterr()
+
+    main(["query", "quantum computing stock market forecast", "--index", index, "--min-score", "1.0"])
+    out = capsys.readouterr().out
+    assert out.strip() == "No relevant context was found for this question."
+
+
 def test_ingest_twice_without_force_adds_nothing_new(tmp_path, capsys):
     docs = _make_docs(tmp_path)
     index = str(tmp_path / "index")

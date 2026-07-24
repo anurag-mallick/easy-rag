@@ -19,6 +19,27 @@ def test_retrieval_only_generator_handles_no_matches():
     assert "No relevant context" in answer
 
 
+def test_anthropic_generator_skips_the_api_call_with_no_context(monkeypatch):
+    anthropic_pkg = pytest.importorskip("anthropic", reason="anthropic package not installed")
+    from easy_rag.llm import AnthropicGenerator
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unused-placeholder")
+
+    class FakeMessages:
+        def create(self, **kw):
+            raise AssertionError("should not call the API when contexts is empty")
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(anthropic_pkg, "Anthropic", FakeClient)
+
+    generator = AnthropicGenerator()
+    answer = generator.generate("anything", [])
+    assert answer == "No relevant context was found for this question."
+
+
 def test_openai_generator_base_url_points_at_a_local_server(monkeypatch):
     # Confirms base_url lets OpenAIGenerator talk to a locally running
     # llama-server instead of the real OpenAI API, without a real network
@@ -29,6 +50,26 @@ def test_openai_generator_base_url_points_at_a_local_server(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "unused-placeholder")
     generator = OpenAIGenerator(model="local-model", base_url="http://localhost:8080/v1")
     assert str(generator._client.base_url).startswith("http://localhost:8080/v1")
+
+
+def test_openai_generator_skips_the_api_call_with_no_context(monkeypatch):
+    pytest.importorskip("openai", reason="openai package not installed")
+    from easy_rag.llm import OpenAIGenerator
+
+    monkeypatch.setenv("OPENAI_API_KEY", "unused-placeholder")
+
+    class FakeCompletions:
+        def create(self, **kw):
+            raise AssertionError("should not call the API when contexts is empty")
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    generator = OpenAIGenerator()
+    generator._client.chat = FakeChat()
+    answer = generator.generate("anything", [])
+    assert answer == "No relevant context was found for this question."
 
 
 def test_gemini_generator_requires_install_with_helpful_message(monkeypatch):
@@ -79,6 +120,27 @@ def test_gemini_generator_wiring_with_a_stubbed_client(monkeypatch):
     assert answer == "The refund window is 30 days."
 
 
+def test_gemini_generator_skips_the_api_call_with_no_context(monkeypatch):
+    genai = pytest.importorskip("google.genai", reason="google-genai package not installed")
+    monkeypatch.setenv("GEMINI_API_KEY", "unused-placeholder")
+
+    class FakeModels:
+        def generate_content(self, **kw):
+            raise AssertionError("should not call the API when contexts is empty")
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+
+    from easy_rag.llm import GeminiGenerator
+
+    generator = GeminiGenerator()
+    answer = generator.generate("anything", [])
+    assert answer == "No relevant context was found for this question."
+
+
 def test_llamacpp_generator_requires_install_with_helpful_message(monkeypatch):
     import builtins
 
@@ -122,3 +184,22 @@ def test_llamacpp_generator_wiring_with_a_stubbed_model(monkeypatch, tmp_path):
         [(0.9, "The refund window is 30 days.", "policy.txt")],
     )
     assert answer == "The refund window is 30 days."
+
+
+def test_llamacpp_generator_skips_inference_with_no_context(monkeypatch, tmp_path):
+    llama_cpp = pytest.importorskip("llama_cpp", reason="llama-cpp-python not installed")
+
+    class FakeLlama:
+        def __init__(self, model_path=None, n_ctx=None, verbose=None, **kw):
+            pass
+
+        def create_chat_completion(self, **kw):
+            raise AssertionError("should not run inference when contexts is empty")
+
+    monkeypatch.setattr(llama_cpp, "Llama", FakeLlama)
+
+    from easy_rag.llm import LlamaCppGenerator
+
+    generator = LlamaCppGenerator(model_path=str(tmp_path / "fake.gguf"))
+    answer = generator.generate("anything", [])
+    assert answer == "No relevant context was found for this question."

@@ -11,6 +11,14 @@ from .loaders import load_documents
 from .llm import get_generator
 from .vectorstore import get_vectorstore
 
+# Bumped whenever save()'s config.json schema changes in a way that would
+# break load() for an index saved by an older version -- lets load() give a
+# clear "upgrade/re-ingest" error instead of a confusing crash (or worse,
+# silently misinterpreted fields) when opening an index from a much older
+# or newer install. Indexes saved before this existed have no "version"
+# key at all; load() treats that as version 0.
+CONFIG_VERSION = 1
+
 
 class Pipeline:
     def __init__(
@@ -93,14 +101,30 @@ class Pipeline:
             self.vectorstore.add(vectors, all_chunks, all_sources)
         return len(all_chunks)
 
-    def retrieve(self, question, top_k=4):
-        """Return the top_k most relevant (score, chunk_text, source) tuples."""
-        query_vector = self.embedder.embed([question])[0]
-        return self.vectorstore.search(query_vector, top_k=top_k)
+    def retrieve(self, question, top_k=4, min_score=None):
+        """Return up to top_k (score, chunk_text, source) tuples, best first.
 
-    def query(self, question, top_k=4):
+        Without min_score, this always returns top_k results regardless of
+        how relevant they actually are -- a question unrelated to anything
+        ingested still gets back its "closest" (meaningless) chunks. Pass
+        min_score to drop results below that similarity score instead, so
+        an unrelated question can come back with no results at all rather
+        than noise. There is no single universal threshold: cosine-
+        similarity scores are not comparable across embedders (the default
+        hashing embedder's scores run much lower than a real sentence-
+        embedding model's for a true match), so pick a value empirically
+        for whichever embedder you're using rather than reusing one from
+        elsewhere.
+        """
+        query_vector = self.embedder.embed([question])[0]
+        results = self.vectorstore.search(query_vector, top_k=top_k)
+        if min_score is not None:
+            results = [r for r in results if r[0] >= min_score]
+        return results
+
+    def query(self, question, top_k=4, min_score=None):
         """Retrieve relevant context and generate an answer from it."""
-        contexts = self.retrieve(question, top_k=top_k)
+        contexts = self.retrieve(question, top_k=top_k, min_score=min_score)
         return self.generator.generate(question, contexts)
 
     def save(self, path):
@@ -108,6 +132,7 @@ class Pipeline:
         (a path prefix; several files sharing that prefix will be written)."""
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         config = {
+            "version": CONFIG_VERSION,
             "embedder": self._embedder_name,
             "embedder_kwargs": self._embedder_kwargs,
             "vectorstore": self._vectorstore_name,
@@ -127,6 +152,12 @@ class Pipeline:
         same embedder and vector store it was built with."""
         with open(path + ".config.json", "r", encoding="utf-8") as f:
             config = json.load(f)
+        saved_version = config.get("version", 0)  # 0: saved before versioning existed
+        if saved_version > CONFIG_VERSION:
+            raise ValueError(
+                f"Index {path!r} was saved by a newer easy-rag (config version {saved_version}) "
+                f"than this install supports (version {CONFIG_VERSION}). Upgrade easy-rag to load it."
+            )
         pipeline = cls(
             embedder=config["embedder"],
             vectorstore=config["vectorstore"],
