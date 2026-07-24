@@ -23,7 +23,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # dev: pytest itself.
+          # pdf/docx: needed so tests/test_loaders.py exercises the real
+          # parsing paths (not just the "package missing" ImportError
+          # path) -- e.g. a genuinely corrupt PDF needs pypdf installed to
+          # raise a content error rather than an import error.
+          # openai/anthropic/gemini: lightweight pure-Python API clients
+          # (no compilation), so their stubbed-client wiring tests run for
+          # real here instead of skipping.
+          # Deliberately excluded: "local" (pulls in torch -- slow) and
+          # "llamacpp" (source-compiles llama.cpp on platforms without a
+          # prebuilt wheel -- can take a long time or fail outright, as
+          # seen firsthand while developing this project on Windows).
+          pip install -e ".[dev,pdf,docx,openai,anthropic,gemini]"
 
       - name: Run tests
         run: pytest -v
