@@ -28,6 +28,7 @@ class Pipeline:
         llm="none",
         chunk_size=800,
         chunk_overlap=120,
+        pdf_backend="pypdf",
         embedder_kwargs=None,
         vectorstore_kwargs=None,
         llm_kwargs=None,
@@ -50,6 +51,7 @@ class Pipeline:
         )
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.pdf_backend = pdf_backend
         self._manifest = {}  # absolute source path -> [mtime, size] at last ingest
 
     def ingest(self, path, force=False):
@@ -64,7 +66,7 @@ class Pipeline:
 
         Returns the number of chunks added.
         """
-        documents = load_documents(path)
+        documents = load_documents(path, pdf_backend=self.pdf_backend)
         to_process = []  # (abs_source, fingerprint, chunks) for changed files
         for doc in documents:
             # Always key by the absolute path, so the same file ingested via
@@ -139,6 +141,7 @@ class Pipeline:
             "vectorstore_kwargs": self._vectorstore_kwargs,
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
+            "pdf_backend": self.pdf_backend,
         }
         with open(path + ".config.json", "w", encoding="utf-8") as f:
             json.dump(config, f)
@@ -164,6 +167,7 @@ class Pipeline:
             llm=llm,
             chunk_size=config["chunk_size"],
             chunk_overlap=config["chunk_overlap"],
+            pdf_backend=config.get("pdf_backend", "pypdf"),  # absent in indexes saved before this existed
             embedder_kwargs=config["embedder_kwargs"],
             vectorstore_kwargs=config["vectorstore_kwargs"],
             llm_kwargs=llm_kwargs,

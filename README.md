@@ -83,11 +83,42 @@ interface (see [Architecture](#architecture)).
 Mixing file types in the same folder is fine — `ingest()` picks the right
 loader per file automatically and skips anything it doesn't recognize.
 
+#### Higher-quality PDF extraction with opendataloader-pdf
+
+The default PDF reader (`pypdf`) does a flat text dump — fine for simple
+documents, but it can scramble reading order on multi-column layouts, tables,
+and complex forms. [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
+is an alternative backend that preserves reading order and document
+structure, at the cost of a heavier dependency: it wraps a JVM-based parser,
+so it needs **Java 11+ installed on your system** in addition to the Python
+package.
+
+```bash
+pip install easy-rag[opendataloader]
+```
+
+```python
+pipeline = Pipeline(pdf_backend="opendataloader")
+```
+
+```bash
+easyrag ingest ./my_documents --pdf-backend opendataloader
+```
+
+If Java isn't found, this raises a clear error telling you to install it (or
+switch back to `pdf_backend="pypdf"`) rather than silently misbehaving.
+Internally, PDFs are batched into as few JVM invocations as possible for
+speed, while still converting files one at a time whenever that's needed for
+correctness -- a single invalid PDF, or two different PDFs that happen to
+share the same filename in different folders, are both handled without
+losing or corrupting any other file's content.
+
 ## Installation
 
 ```bash
 pip install -e .                 # core: .txt / .md / .csv (numpy only)
 pip install -e ".[pdf]"          # + PDF support
+pip install -e ".[opendataloader]" # + higher-quality PDF extraction (also needs Java 11+)
 pip install -e ".[docx]"         # + Word document support
 pip install -e ".[ocr]"          # + image support (also needs Tesseract OCR installed)
 pip install -e ".[local]"        # + real local embeddings (sentence-transformers, faiss)
@@ -343,7 +374,7 @@ e.g. `export OPENAI_API_KEY=unused`.)
 
 ```
 easy_rag/
-  loaders.py       load text/md/csv/pdf/docx/image files into Document objects
+  loaders.py       load text/md/csv/pdf(2 backends)/docx/image files into Document objects
   chunking.py       split text into overlapping chunks at paragraph/sentence boundaries
   embeddings.py      Embedder implementations: hashing (default), local, openai, gemini, llamacpp
   vectorstore.py      VectorStore implementations: numpy (default), faiss

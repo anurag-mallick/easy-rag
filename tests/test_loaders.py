@@ -76,6 +76,92 @@ def test_corrupt_file_is_skipped_without_losing_other_valid_files(tmp_path):
     assert docs[0].text == "this is a perfectly fine document"
 
 
+def test_invalid_pdf_backend_raises():
+    with pytest.raises(ValueError, match="Unknown pdf_backend"):
+        load_documents(".", pdf_backend="not-a-real-backend")
+
+
+def test_opendataloader_backend_requires_install_with_helpful_message(tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "opendataloader_pdf":
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    (tmp_path / "report.pdf").write_bytes(b"not a real pdf, just bytes")
+
+    with pytest.raises(ImportError, match=r"easy-rag\[opendataloader\]"):
+        load_documents(str(tmp_path), pdf_backend="opendataloader")
+
+
+def _make_pdf(path, text):
+    fitz = pytest.importorskip("fitz", reason="pymupdf not installed (only needed to build test PDFs)")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text, fontsize=14)
+    doc.save(str(path))
+
+
+def test_opendataloader_backend_extracts_real_pdf_text(tmp_path):
+    pytest.importorskip("opendataloader_pdf", reason="opendataloader-pdf not installed")
+    import shutil
+
+    if not shutil.which("java"):
+        pytest.skip("Java not installed (opendataloader-pdf requires Java 11+)")
+
+    _make_pdf(tmp_path / "policy.pdf", "The refund window is 30 days from purchase.")
+
+    docs = load_documents(str(tmp_path), pdf_backend="opendataloader")
+
+    assert len(docs) == 1
+    assert "30 days" in docs[0].text
+
+
+def test_opendataloader_backend_skips_corrupt_pdf_without_losing_good_ones(tmp_path):
+    pytest.importorskip("opendataloader_pdf", reason="opendataloader-pdf not installed")
+    import shutil
+
+    if not shutil.which("java"):
+        pytest.skip("Java not installed (opendataloader-pdf requires Java 11+)")
+
+    _make_pdf(tmp_path / "policy.pdf", "The refund window is 30 days from purchase.")
+    (tmp_path / "corrupt.pdf").write_bytes(b"not a real pdf, just garbage bytes")
+
+    docs = load_documents(str(tmp_path), pdf_backend="opendataloader")
+
+    assert len(docs) == 1
+    assert "30 days" in docs[0].text
+
+
+def test_opendataloader_backend_handles_same_basename_in_different_folders(tmp_path):
+    # opendataloader-pdf writes every batched file's output into one shared
+    # directory named only after the input basename -- two different PDFs
+    # sharing a basename would silently overwrite each other's output if
+    # batched together naively. Found by testing the real tool directly.
+    pytest.importorskip("opendataloader_pdf", reason="opendataloader-pdf not installed")
+    import shutil
+
+    if not shutil.which("java"):
+        pytest.skip("Java not installed (opendataloader-pdf requires Java 11+)")
+
+    (tmp_path / "dirA").mkdir()
+    (tmp_path / "dirB").mkdir()
+    _make_pdf(tmp_path / "dirA" / "report.pdf", "Document A content about apples.")
+    _make_pdf(tmp_path / "dirB" / "report.pdf", "Document B content about bananas.")
+
+    docs = load_documents(str(tmp_path), pdf_backend="opendataloader")
+
+    assert len(docs) == 2
+    texts = {d.text for d in docs}
+    assert any("apples" in t for t in texts)
+    assert any("bananas" in t for t in texts)
+
+
 def test_docx_without_dependency_raises_helpful_error(tmp_path, monkeypatch):
     import builtins
 

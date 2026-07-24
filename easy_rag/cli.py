@@ -25,6 +25,7 @@ def _load_or_create_pipeline(args):
             vectorstore=args.vectorstore,
             chunk_size=args.chunk_size,
             chunk_overlap=args.chunk_overlap,
+            pdf_backend=args.pdf_backend,
         ),
         False,
     )
@@ -123,6 +124,7 @@ def build_parser():
     p_ingest.add_argument("--vectorstore", default="numpy", choices=["numpy", "faiss"])
     p_ingest.add_argument("--chunk-size", type=int, default=800)
     p_ingest.add_argument("--chunk-overlap", type=int, default=120)
+    p_ingest.add_argument("--pdf-backend", default="pypdf", choices=["pypdf", "opendataloader"], help="'opendataloader' preserves reading order/structure better but requires Java 11+ and pip install easy-rag[opendataloader]")
     p_ingest.add_argument("--force", action="store_true", help="Re-ingest every file regardless of the manifest, instead of skipping unchanged ones")
     p_ingest.set_defaults(func=cmd_ingest)
 
@@ -161,6 +163,7 @@ def build_parser():
     p_watch.add_argument("--vectorstore", default="numpy", choices=["numpy", "faiss"])
     p_watch.add_argument("--chunk-size", type=int, default=800)
     p_watch.add_argument("--chunk-overlap", type=int, default=120)
+    p_watch.add_argument("--pdf-backend", default="pypdf", choices=["pypdf", "opendataloader"], help="'opendataloader' preserves reading order/structure better but requires Java 11+ and pip install easy-rag[opendataloader]")
     p_watch.set_defaults(func=cmd_watch)
 
     return parser
