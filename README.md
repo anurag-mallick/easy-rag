@@ -153,6 +153,9 @@ Here is the whole process, end to end:
    that are new or changed — everything else is skipped, and a changed file's
    old chunks are automatically replaced rather than left behind as stale
    duplicates.
+5. **Need to force a full re-ingest anyway** (e.g. after changing
+   `--chunk-size`)? Add `--force` to reprocess every file regardless of the
+   manifest: `easyrag ingest ./my_documents --index .easyrag/index --force`.
 
 That's the entire loop. There is no separate training run, no GPU required
 for the default setup, and no waiting — the example in this repo indexes and
@@ -235,6 +238,13 @@ option — pass `--model` (CLI) or `model=` (`llm_kwargs`/`embedder_kwargs`)
 to use whichever model your account has access to; all three providers
 release new models faster than any hardcoded default can track, so check
 each provider's current model list if a default ever stops working.
+
+The `openai` and `gemini` embedders send requests in batches (default 100
+texts per request, override with `batch_size=`) rather than one giant
+request for an entire `ingest()` call, and retry a failed batch a few times
+with exponential backoff before giving up — so a large ingest survives a
+provider's per-request size limit and rides out a transient rate-limit or
+network error instead of aborting on the first hiccup.
 
 ## Running a local LLM with llama.cpp
 

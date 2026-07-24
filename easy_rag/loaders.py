@@ -38,7 +38,13 @@ def _load_csv_file(path):
     for row in data_rows:
         pairs = ", ".join(f"{h}: {v}" for h, v in zip(header, row))
         lines.append(pairs)
-    return "\n".join(lines)
+    # Each row is its own paragraph (chunking.py splits on blank lines) so
+    # the chunker breaks between rows instead of hard-wrapping mid-row --
+    # a single "\n" join collapses the whole CSV into one giant paragraph,
+    # which for punctuation-free "key: value" rows falls through the
+    # sentence splitter untouched and gets cut by raw character count,
+    # slicing words in half across chunk boundaries.
+    return "\n\n".join(lines)
 
 
 def _load_pdf_file(path):

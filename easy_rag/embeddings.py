@@ -7,10 +7,44 @@ plain dot product regardless of which provider produced them.
 
 import hashlib
 import re
+import time
 
 import numpy as np
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _batched_call(texts, call_fn, batch_size=100, max_retries=3, backoff_base=1.0):
+    """Call call_fn(batch_of_texts) -> (batch_n, dim) ndarray once per
+    batch_size-sized slice of `texts`, concatenating the results into one
+    (N, dim) array.
+
+    Shared by every API-backed embedder (OpenAI, Gemini, ...) so this
+    behavior lives in one place rather than being duplicated -- and
+    potentially duplicated inconsistently -- per provider:
+
+    - Splitting into batches avoids exceeding a provider's per-request
+      token/item limit on a large ingest() call.
+    - Retrying a failed batch with exponential backoff, instead of letting
+      it abort the whole ingest immediately, rides out a transient rate
+      limit or network blip. A permanent error (e.g. a bad API key) still
+      raises after max_retries -- retrying just costs a few bounded
+      seconds in that case rather than hanging indefinitely.
+    """
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+    results = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        for attempt in range(max_retries + 1):
+            try:
+                results.append(call_fn(batch))
+                break
+            except Exception:
+                if attempt == max_retries:
+                    raise
+                time.sleep(backoff_base * (2**attempt))
+    return np.concatenate(results, axis=0)
 
 
 class Embedder:
@@ -106,7 +140,7 @@ class OpenAIEmbedder(Embedder):
 
     name = "openai"
 
-    def __init__(self, model="text-embedding-3-small", base_url=None, dim=None):
+    def __init__(self, model="text-embedding-3-small", base_url=None, dim=None, batch_size=100):
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -116,6 +150,7 @@ class OpenAIEmbedder(Embedder):
             ) from e
         self._client = OpenAI(base_url=base_url) if base_url else OpenAI()
         self._model = model
+        self._batch_size = batch_size
         if dim is not None:
             # Talking to a local/self-hosted server serving a model OpenAI
             # doesn't know about -- the caller must state its dimension.
@@ -133,11 +168,14 @@ class OpenAIEmbedder(Embedder):
             )
 
     def embed(self, texts):
-        resp = self._client.embeddings.create(model=self._model, input=list(texts))
-        vecs = np.array([d.embedding for d in resp.data], dtype=np.float32)
-        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        return vecs / norms
+        def call(batch):
+            resp = self._client.embeddings.create(model=self._model, input=list(batch))
+            vecs = np.array([d.embedding for d in resp.data], dtype=np.float32)
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            return vecs / norms
+
+        return _batched_call(list(texts), call, batch_size=self._batch_size)
 
 
 # Dimensions of Google's current Gemini embedding models. gemini-embedding-001
@@ -156,7 +194,7 @@ class GeminiEmbedder(Embedder):
 
     name = "gemini"
 
-    def __init__(self, model="gemini-embedding-001", output_dim=None):
+    def __init__(self, model="gemini-embedding-001", output_dim=None, batch_size=100):
         try:
             from google import genai
         except ImportError as e:
@@ -168,6 +206,7 @@ class GeminiEmbedder(Embedder):
         self._client = genai.Client()
         self._model = model
         self._output_dim = output_dim
+        self._batch_size = batch_size
         if output_dim is not None:
             self.dim = output_dim
         elif model in _GEMINI_EMBEDDING_DIMS:
@@ -180,11 +219,15 @@ class GeminiEmbedder(Embedder):
 
     def embed(self, texts):
         config = {"output_dimensionality": self._output_dim} if self._output_dim else None
-        resp = self._client.models.embed_content(model=self._model, contents=list(texts), config=config)
-        vecs = np.array([e.values for e in resp.embeddings], dtype=np.float32)
-        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        return vecs / norms
+
+        def call(batch):
+            resp = self._client.models.embed_content(model=self._model, contents=list(batch), config=config)
+            vecs = np.array([e.values for e in resp.embeddings], dtype=np.float32)
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            return vecs / norms
+
+        return _batched_call(list(texts), call, batch_size=self._batch_size)
 
 
 class LlamaCppEmbedder(Embedder):

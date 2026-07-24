@@ -49,9 +49,10 @@ def cmd_ingest(args):
 
     total = 0
     for folder in folders:
-        total += pipeline.ingest(folder)
+        total += pipeline.ingest(folder, force=args.force)
     pipeline.save(args.index)
-    print(f"Added {total} chunk(s) from {len(folders)} folder(s) into index {args.index!r}.")
+    verb = "Re-ingested" if args.force else "Added"
+    print(f"{verb} {total} chunk(s) from {len(folders)} folder(s) into index {args.index!r}.")
 
 
 def cmd_query(args):
@@ -122,6 +123,7 @@ def build_parser():
     p_ingest.add_argument("--vectorstore", default="numpy", choices=["numpy", "faiss"])
     p_ingest.add_argument("--chunk-size", type=int, default=800)
     p_ingest.add_argument("--chunk-overlap", type=int, default=120)
+    p_ingest.add_argument("--force", action="store_true", help="Re-ingest every file regardless of the manifest, instead of skipping unchanged ones")
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_query = sub.add_parser("query", help="Ask a question against a previously built index.")

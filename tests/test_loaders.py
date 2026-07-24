@@ -1,5 +1,6 @@
 import pytest
 
+from easy_rag.chunking import split_text
 from easy_rag.loaders import load_documents
 
 
@@ -25,6 +26,28 @@ def test_loads_csv_as_readable_rows(tmp_path):
     assert "name: Ava" in docs[0].text
     assert "role: Engineer" in docs[0].text
     assert "name: Ben" in docs[0].text
+
+
+def test_csv_rows_are_separated_by_blank_lines_for_correct_chunking(tmp_path):
+    # chunking.py only treats a blank line as a paragraph break. Joining CSV
+    # rows with a single newline collapses the whole file into one giant
+    # paragraph; for punctuation-free "key: value" rows (no '.', '!', '?')
+    # the sentence-splitter fallback finds no boundary either, so an
+    # oversized CSV gets hard-wrapped by raw character count -- slicing
+    # words in half wherever a chunk boundary happens to land mid-row.
+    csv_path = tmp_path / "data.csv"
+    rows = ["name,role,dept"] + [f"Person{i},Engineer,Team{i % 5}" for i in range(80)]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+
+    docs = load_documents(str(csv_path))
+    text = docs[0].text
+    assert "\n\n" in text  # rows are blank-line-separated paragraphs
+
+    chunks = split_text(text, chunk_size=200, overlap=40)
+    full_words = set(text.replace(",", " ").replace(":", " ").split())
+    chunk_words = set(" ".join(chunks).replace(",", " ").replace(":", " ").split())
+    mangled = chunk_words - full_words
+    assert not mangled, f"chunking introduced truncated/mangled words: {mangled}"
 
 
 def test_unsupported_extensions_are_skipped(tmp_path):

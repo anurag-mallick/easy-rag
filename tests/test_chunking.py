@@ -46,3 +46,38 @@ def test_overlap_at_exactly_half_chunk_size_is_allowed():
 
 def test_empty_text_returns_no_chunks():
     assert split_text("   \n\n  ", chunk_size=100, overlap=10) == []
+
+
+def _mangled_words(original_text, chunks):
+    """Words that appear in the chunked output but not in the source text
+    at all -- i.e. fragments created by cutting a word in half."""
+    full_words = set(original_text.replace(",", " ").replace(":", " ").split())
+    chunk_words = set(" ".join(chunks).replace(",", " ").replace(":", " ").split())
+    return chunk_words - full_words
+
+
+def test_overlap_seed_does_not_split_a_word_in_half():
+    # A stream of short, similar-length rows (no punctuation) is exactly
+    # the shape that makes a raw current[-overlap:] slice land mid-word on
+    # nearly every chunk -- e.g. "name: PersonN, ..." repeatedly getting
+    # sliced to "me: PersonN, ...". This must never happen.
+    rows = [f"name: Person{i}, role: Engineer, dept: Team{i % 5}" for i in range(80)]
+    text = "\n\n".join(rows)
+
+    chunks = split_text(text, chunk_size=200, overlap=40)
+
+    assert not _mangled_words(text, chunks)
+    assert not any(c.startswith(("me:", "e:", "am:")) for c in chunks[1:])
+
+
+def test_hard_wrap_of_an_unpunctuated_paragraph_does_not_split_words():
+    # A long paragraph with zero sentence-ending punctuation (a word list,
+    # a log line, unpunctuated bullet points) is treated as one giant
+    # "sentence" and hard-wrapped by chunk_size -- the raw character-count
+    # wrap this used to do would slice words in half at every boundary.
+    text = " ".join(["consectetur", "adipiscing", "elit", "department", "engineer"] * 40)
+
+    chunks = split_text(text, chunk_size=60, overlap=20)
+
+    assert not _mangled_words(text, chunks)
+    assert all(len(c) <= 60 for c in chunks)

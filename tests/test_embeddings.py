@@ -1,7 +1,52 @@
 import numpy as np
 import pytest
 
-from easy_rag.embeddings import _OPENAI_EMBEDDING_DIMS, HashingEmbedder
+from easy_rag.embeddings import _batched_call, _OPENAI_EMBEDDING_DIMS, HashingEmbedder
+
+
+def test_batched_call_splits_into_multiple_batches():
+    calls = []
+
+    def call_fn(batch):
+        calls.append(list(batch))
+        return np.ones((len(batch), 2), dtype=np.float32)
+
+    result = _batched_call([f"t{i}" for i in range(25)], call_fn, batch_size=10)
+
+    assert result.shape == (25, 2)
+    assert len(calls) == 3  # 10 + 10 + 5
+    assert [len(c) for c in calls] == [10, 10, 5]
+
+
+def test_batched_call_with_no_texts_returns_empty_array():
+    result = _batched_call([], lambda batch: np.ones((len(batch), 2)), batch_size=10)
+    assert result.shape == (0, 0)
+
+
+def test_batched_call_retries_a_transient_failure_then_succeeds(monkeypatch):
+    monkeypatch.setattr("easy_rag.embeddings.time.sleep", lambda _seconds: None)
+    attempts = {"n": 0}
+
+    def call_fn(batch):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("simulated transient rate limit")
+        return np.ones((len(batch), 2), dtype=np.float32)
+
+    result = _batched_call(["a", "b"], call_fn, batch_size=10, max_retries=3)
+
+    assert result.shape == (2, 2)
+    assert attempts["n"] == 3
+
+
+def test_batched_call_raises_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr("easy_rag.embeddings.time.sleep", lambda _seconds: None)
+
+    def call_fn(_batch):
+        raise RuntimeError("permanent failure (e.g. bad API key)")
+
+    with pytest.raises(RuntimeError, match="permanent failure"):
+        _batched_call(["a"], call_fn, batch_size=10, max_retries=2)
 
 
 def test_hashing_embedder_returns_normalized_vectors():
@@ -69,6 +114,42 @@ def test_openai_embedder_base_url_with_explicit_dim_is_accepted(monkeypatch):
     embedder = OpenAIEmbedder(model="my-local-model", base_url="http://localhost:8080/v1", dim=768)
     assert embedder.dim == 768
     assert str(embedder._client.base_url).startswith("http://localhost:8080/v1")
+
+
+def test_openai_embedder_batches_large_requests(monkeypatch):
+    # Confirms embed() actually goes through _batched_call rather than
+    # sending every text in one request regardless of how many there are.
+    openai_pkg = pytest.importorskip("openai", reason="openai package not installed")
+    from easy_rag.embeddings import OpenAIEmbedder
+
+    monkeypatch.setenv("OPENAI_API_KEY", "unused-placeholder")
+
+    class FakeEmbeddingItem:
+        def __init__(self, embedding):
+            self.embedding = embedding
+
+    class FakeResponse:
+        def __init__(self, n):
+            self.data = [FakeEmbeddingItem([1.0, 0.0]) for _ in range(n)]
+
+    calls = []
+
+    class FakeEmbeddings:
+        def create(self, model, input):
+            calls.append(list(input))
+            return FakeResponse(len(input))
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.embeddings = FakeEmbeddings()
+
+    monkeypatch.setattr(openai_pkg, "OpenAI", FakeClient)
+
+    embedder = OpenAIEmbedder(model="text-embedding-3-small", batch_size=4)
+    vectors = embedder.embed([f"t{i}" for i in range(10)])
+
+    assert vectors.shape == (10, 2)
+    assert [len(c) for c in calls] == [4, 4, 2]
 
 
 def test_known_gemini_model_dims_are_correct():
@@ -143,6 +224,40 @@ def test_gemini_embedder_wiring_with_a_stubbed_client(monkeypatch):
     vectors = embedder.embed(["a", "b"])
     assert vectors.shape == (2, 3)
     assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0)
+
+
+def test_gemini_embedder_batches_large_requests(monkeypatch):
+    genai = pytest.importorskip("google.genai", reason="google-genai package not installed")
+    monkeypatch.setenv("GEMINI_API_KEY", "unused-placeholder")
+
+    class FakeEmbedding:
+        def __init__(self, values):
+            self.values = values
+
+    class FakeResponse:
+        def __init__(self, n):
+            self.embeddings = [FakeEmbedding([1.0, 0.0]) for _ in range(n)]
+
+    calls = []
+
+    class FakeModels:
+        def embed_content(self, model, contents, config=None):
+            calls.append(list(contents))
+            return FakeResponse(len(contents))
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+
+    from easy_rag.embeddings import GeminiEmbedder
+
+    embedder = GeminiEmbedder(model="gemini-embedding-001", output_dim=2, batch_size=4)
+    vectors = embedder.embed([f"t{i}" for i in range(10)])
+
+    assert vectors.shape == (10, 2)
+    assert [len(c) for c in calls] == [4, 4, 2]
 
 
 def test_llamacpp_embedder_requires_install_with_helpful_message(monkeypatch):
